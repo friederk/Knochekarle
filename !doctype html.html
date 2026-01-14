@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Schulden-Tracker (2–6 Spieler)</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    body { margin: 24px; max-width: 900px; }
+    h1 { margin: 0 0 12px; font-size: 22px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; margin-bottom: 16px; }
+    label { display: grid; gap: 6px; font-size: 14px; }
+    input, select, button { padding: 10px 12px; font-size: 14px; border: 1px solid #ccc; border-radius: 10px; }
+    button { cursor: pointer; border: 1px solid #bbb; background: #f7f7f7; }
+    button:hover { background: #f0f0f0; }
+    button.danger { border-color: #d5a1a1; background: #fff3f3; }
+    button.danger:hover { background: #ffe8e8; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #eee; vertical-align: middle; }
+    th { font-size: 13px; color: #444; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .pill { display: inline-block; padding: 4px 10px; border: 1px solid #ddd; border-radius: 999px; background: #fafafa; font-variant-numeric: tabular-nums; }
+    .muted { color: #666; font-size: 13px; }
+    .small { font-size: 12px; }
+    .spacer { flex: 1; }
+  </style>
+</head>
+<body>
+  <h1>Schulden-Tracker (2–6 Spieler)</h1>
+  <p class="muted">
+    Trägt pro Spieler eine Gesamtschuld ein (z. B. gegenüber der „Bank“/Runde). Änderungen werden automatisch gespeichert.
+  </p>
+
+  <div class="row">
+    <label>
+      Anzahl Spieler
+      <select id="playerCount">
+        <option value="2">2</option>
+        <option value="3">3</option>
+        <option value="4" selected>4</option>
+        <option value="5">5</option>
+        <option value="6">6</option>
+      </select>
+    </label>
+
+    <div class="spacer"></div>
+
+    <button id="resetAll" class="danger" title="Setzt alle Schulden und Namen zurück">
+      Alles zurücksetzen
+    </button>
+  </div>
+
+  <table aria-label="Spieler-Schulden-Tabelle">
+    <thead>
+      <tr>
+        <th style="width: 28%;">Spieler</th>
+        <th style="width: 20%;">Schulden</th>
+        <th style="width: 52%;">Aktionen</th>
+      </tr>
+    </thead>
+    <tbody id="playersTbody"></tbody>
+    <tfoot>
+      <tr>
+        <td><strong>Summe</strong></td>
+        <td colspan="2"><span id="sumPill" class="pill">0</span></td>
+      </tr>
+    </tfoot>
+  </table>
+
+  <p class="muted small" style="margin-top: 14px;">
+    Tipp: Du kannst Beträge auch negativ machen, falls du „Guthaben“ abbilden willst. Wenn das für eure Runde nicht sinnvoll ist,
+    kann ich es leicht so ändern, dass nur ≥ 0 erlaubt ist.
+  </p>
+
+<script>
+  // --- State management (stored in localStorage) ---
+  // Comments are in English as requested.
+
+  const STORAGE_KEY = "debt_tracker_v1";
+
+  function loadState() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+
+  function saveState(state) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }
+
+  function defaultState(count = 4) {
+    return {
+      playerCount: count,
+      players: Array.from({ length: count }, (_, i) => ({
+        name: `Spieler ${i + 1}`,
+        debt: 0
+      }))
+    };
+  }
+
+  function normalizeState(state) {
+    // Ensure state is well-formed and respects 2–6 players.
+    let count = Number(state?.playerCount ?? 4);
+    if (!Number.isFinite(count)) count = 4;
+    count = Math.min(6, Math.max(2, count));
+
+    const players = Array.isArray(state?.players) ? state.players.slice(0, count) : [];
+    while (players.length < count) {
+      players.push({ name: `Spieler ${players.length + 1}`, debt: 0 });
+    }
+
+    // Normalize each player object.
+    for (let i = 0; i < players.length; i++) {
+      const p = players[i] ?? {};
+      const name = String(p.name ?? `Spieler ${i + 1}`).trim() || `Spieler ${i + 1}`;
+      const debt = Number(p.debt ?? 0);
+      players[i] = { name, debt: Number.isFinite(debt) ? debt : 0 };
+    }
+
+    return { playerCount: count, players };
+  }
+
+  // --- UI helpers ---
+  const playerCountEl = document.getElementById("playerCount");
+  const tbodyEl = document.getElementById("playersTbody");
+  const sumPillEl = document.getElementById("sumPill");
+  const resetAllEl = document.getElementById("resetAll");
+
+  let state = normalizeState(loadState() ?? defaultState(4));
+  saveState(state);
+
+  function formatMoney(n) {
+    // Keep it simple: show as number with up to 2 decimals.
+    const value = Math.round((n + Number.EPSILON) * 100) / 100;
+    return value.toLocaleString("de-DE", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  }
+
+  function computeSum() {
+    return state.players.reduce((acc, p) => acc + (Number(p.debt) || 0), 0);
+  }
+
+  function updateSumUI() {
+    sumPillEl.textContent = formatMoney(computeSum());
+  }
+
+  function render() {
+    playerCountEl.value = String(state.playerCount);
+    tbodyEl.innerHTML = "";
+
+    state.players.forEach((p, idx) => {
+      const tr = document.createElement("tr");
+
+      // Name cell
+      const tdName = document.createElement("td");
+      const nameInput = document.createElement("input");
+      nameInput.type = "text";
+      nameInput.value = p.name;
+      nameInput.setAttribute("aria-label", `Name Spieler ${idx + 1}`);
+      nameInput.addEventListener("input", () => {
+        state.players[idx].name = nameInput.value;
+        saveState(state);
+      });
+      tdName.appendChild(nameInput);
+
+      // Debt cell
+      const tdDebt = document.createElement("td");
+      const debtPill = document.createElement("span");
+      debtPill.className = "pill";
+      debtPill.textContent = formatMoney(p.debt);
+      tdDebt.appendChild(debtPill);
+
+      // Actions cell
+      const tdActions = document.createElement("td");
+      const actions = document.createElement("div");
+      actions.className = "actions";
+
+      const deltaInput = document.createElement("input");
+      deltaInput.type = "number";
+      deltaInput.step = "0.01";
+      deltaInput.placeholder = "Betrag";
+      deltaInput.style.width = "120px";
+      deltaInput.setAttribute("aria-label", `Betrag für ${p.name}`);
+
+      const addBtn = document.createElement("button");
+      addBtn.textContent = "+ hinzufügen";
+      addBtn.addEventListener("click", () => applyDelta(idx, +1, deltaInput, debtPill));
+
+      const subBtn = document.createElement("button");
+      subBtn.textContent = "– abziehen";
+      subBtn.addEventListener("click", () => applyDelta(idx, -1, deltaInput, debtPill));
+
+      const setBtn = document.createElement("button");
+      setBtn.textContent = "Setzen";
+      setBtn.title = "Setzt Schulden exakt auf den eingegebenen Betrag";
+      setBtn.addEventListener("click", () => setExact(idx, deltaInput, debtPill));
+
+      const clearBtn = document.createElement("button");
+      clearBtn.textContent = "0";
+      clearBtn.title = "Setzt Schulden auf 0";
+      clearBtn.addEventListener("click", () => {
+        state.players[idx].debt = 0;
+        debtPill.textContent = formatMoney(0);
+        saveState(state);
+        updateSumUI();
+      });
+
+      actions.appendChild(deltaInput);
+      actions.appendChild(addBtn);
+      actions.appendChild(subBtn);
+      actions.appendChild(setBtn);
+      actions.appendChild(clearBtn);
+
+      tdActions.appendChild(actions);
+
+      tr.appendChild(tdName);
+      tr.appendChild(tdDebt);
+      tr.appendChild(tdActions);
+
+      tbodyEl.appendChild(tr);
+    });
+
+    updateSumUI();
+  }
+
+  function readAmount(inputEl) {
+    const raw = inputEl.value;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function applyDelta(playerIdx, sign, inputEl, debtPillEl) {
+    const amount = readAmount(inputEl);
+    if (amount === null) {
+      alert("Bitte einen gültigen Betrag eingeben.");
+      return;
+    }
+    const delta = sign * amount;
+    state.players[playerIdx].debt = (Number(state.players[playerIdx].debt) || 0) + delta;
+    debtPillEl.textContent = formatMoney(state.players[playerIdx].debt);
+    saveState(state);
+    updateSumUI();
+    inputEl.select();
+  }
+
+  function setExact(playerIdx, inputEl, debtPillEl) {
+    const amount = readAmount(inputEl);
+    if (amount === null) {
+      alert("Bitte einen gültigen Betrag eingeben.");
+      return;
+    }
+    state.players[playerIdx].debt = amount;
+    debtPillEl.textContent = formatMoney(amount);
+    saveState(state);
+    updateSumUI();
+    inputEl.select();
+  }
+
+  // --- Event wiring ---
+  playerCountEl.addEventListener("change", () => {
+    const newCount = Math.min(6, Math.max(2, Number(playerCountEl.value)));
+    state = normalizeState({ ...state, playerCount: newCount });
+    saveState(state);
+    render();
+  });
+
+  resetAllEl.addEventListener("click", () => {
+    const ok = confirm("Wirklich alles zurücksetzen? (Namen & Schulden)");
+    if (!ok) return;
+    state = defaultState(Number(playerCountEl.value) || 4);
+    state = normalizeState(state);
+    saveState(state);
+    render();
+  });
+
+  // Initial render
+  render();
+</script>
+</body>
+</html>
