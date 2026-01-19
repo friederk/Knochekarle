@@ -49,6 +49,7 @@
       margin: 2px 0;
     }
     input[type="number"] { width: 120px; }
+    input[type="url"] { width: 280px; }
 
     button { cursor: pointer; }
     .pill {
@@ -97,14 +98,16 @@
 
   <div class="card">
     <h2>Spieler</h2>
+    <datalist id="playerNameMemory"></datalist>
     <table>
       <thead>
-        <tr><th>Name</th><th>Schulden (€)</th></tr>
+        <tr><th>Name</th><th>PayPal-Link</th><th>Schulden (€)</th></tr>
       </thead>
       <tbody id="players"></tbody>
       <tfoot>
         <tr>
           <td><strong>Summe</strong></td>
+          <td></td>
           <td id="sumCell"><strong>0.00</strong></td>
         </tr>
       </tfoot>
@@ -172,6 +175,7 @@
 
   // If you already used an older version, changing the key forces a fresh default background for everyone.
   const STORAGE_KEY = "knochekarle_v1";
+  const PLAYER_MEMORY_KEY = "knochekarle_player_memory_v1";
   const MIN_PLAYERS = 2;
   const MAX_PLAYERS = 12;
 
@@ -184,11 +188,21 @@
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   }
 
+  function loadPlayerMemory() {
+    try { return JSON.parse(localStorage.getItem(PLAYER_MEMORY_KEY)); }
+    catch { return null; }
+  }
+
+  function savePlayerMemory(memory) {
+    localStorage.setItem(PLAYER_MEMORY_KEY, JSON.stringify(memory));
+  }
+
   function defaultState(count = 4) {
     return {
       players: Array.from({ length: count }, (_, i) => ({
         name: `Spieler ${i + 1}`,
-        debt: 0
+        debt: 0,
+        paypal: ""
       })),
       rounds: [
         { name: "Letzter Stich", type: "ONE", amount: 0.5, amount2: 0 },
@@ -218,13 +232,14 @@
     // Players
     const players = Array.isArray(st.players) ? st.players.slice(0, playerCount) : [];
     while (players.length < playerCount) {
-      players.push({ name: `Spieler ${players.length + 1}`, debt: 0 });
+      players.push({ name: `Spieler ${players.length + 1}`, debt: 0, paypal: "" });
     }
     for (let i = 0; i < players.length; i++) {
       const p = players[i] ?? {};
       players[i] = {
         name: String(p.name ?? `Spieler ${i + 1}`),
-        debt: Number.isFinite(Number(p.debt)) ? Number(p.debt) : 0
+        debt: Number.isFinite(Number(p.debt)) ? Number(p.debt) : 0,
+        paypal: String(p.paypal ?? "")
       };
     }
 
@@ -261,6 +276,9 @@
 
   let state = ensureState(load() ?? defaultState(4));
   save(state);
+
+  let playerMemory = loadPlayerMemory() ?? {};
+  savePlayerMemory(playerMemory);
 
   // DOM
   const playerCountEl = document.getElementById("playerCount");
@@ -329,6 +347,42 @@
   }
 
   // Focus-safe player rendering: no full re-render on each keystroke.
+  function normalizePlayerName(name) {
+    return String(name ?? "").trim();
+  }
+
+  function setMemoryEntry(name, paypal) {
+    const trimmed = normalizePlayerName(name);
+    if (!trimmed) return;
+    playerMemory[trimmed] = { paypal: String(paypal ?? "") };
+    savePlayerMemory(playerMemory);
+    renderMemoryDatalist();
+  }
+
+  function renderMemoryDatalist() {
+    const datalist = document.getElementById("playerNameMemory");
+    if (!datalist) return;
+    datalist.innerHTML = "";
+    Object.keys(playerMemory)
+      .sort((a, b) => a.localeCompare(b))
+      .forEach(name => {
+        const option = document.createElement("option");
+        option.value = name;
+        datalist.appendChild(option);
+      });
+  }
+
+  function applyMemoryToPlayer(index, nameInput, paypalInput) {
+    const trimmed = normalizePlayerName(nameInput.value);
+    if (!trimmed) return;
+    const memory = playerMemory[trimmed];
+    if (memory?.paypal && !state.players[index].paypal) {
+      state.players[index].paypal = memory.paypal;
+      paypalInput.value = memory.paypal;
+      save(state);
+    }
+  }
+
   function renderPlayers() {
     playersEl.innerHTML = "";
     state.players.forEach((p, idx) => {
@@ -336,7 +390,14 @@
 
       const tdName = document.createElement("td");
       const inp = document.createElement("input");
+      inp.setAttribute("list", "playerNameMemory");
       inp.value = p.name;
+
+      const tdPaypal = document.createElement("td");
+      const paypalInp = document.createElement("input");
+      paypalInp.type = "url";
+      paypalInp.placeholder = "https://paypal.me/...";
+      paypalInp.value = p.paypal ?? "";
 
       inp.addEventListener("input", () => {
         state.players[idx].name = inp.value;
@@ -344,15 +405,29 @@
       });
 
       inp.addEventListener("blur", () => {
+        applyMemoryToPlayer(idx, inp, paypalInp);
+        setMemoryEntry(inp.value, paypalInp.value);
         renderCurrentRound();
       });
 
       tdName.appendChild(inp);
 
+      paypalInp.addEventListener("input", () => {
+        state.players[idx].paypal = paypalInp.value;
+        save(state);
+      });
+
+      paypalInp.addEventListener("blur", () => {
+        setMemoryEntry(inp.value, paypalInp.value);
+      });
+
+      tdPaypal.appendChild(paypalInp);
+
       const tdDebt = document.createElement("td");
       tdDebt.textContent = p.debt.toFixed(2);
 
       tr.appendChild(tdName);
+      tr.appendChild(tdPaypal);
       tr.appendChild(tdDebt);
       playersEl.appendChild(tr);
     });
@@ -600,7 +675,7 @@
     const oldPlayers = state.players.slice();
     const newPlayers = Array.from({ length: n }, (_, i) => {
       if (i < oldPlayers.length) return { ...oldPlayers[i] };
-      return { name: `Spieler ${i + 1}`, debt: 0 };
+      return { name: `Spieler ${i + 1}`, debt: 0, paypal: "" };
     });
 
     state.players = newPlayers;
@@ -643,6 +718,8 @@
   function init() {
     state = ensureState(state);
     save(state);
+    playerMemory = loadPlayerMemory() ?? {};
+    renderMemoryDatalist();
 
     renderPlayerCountOptions();
     setBackgroundFromState();
