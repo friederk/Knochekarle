@@ -74,6 +74,61 @@
     }
     .spacer { flex: 1; }
     .mini { font-size: 12px; }
+
+    .table-wrap {
+      width: 100%;
+      overflow-x: auto;
+    }
+
+    .paypal-col {
+      width: 320px;
+    }
+
+    .paypal-toggle {
+      margin-left: auto;
+      white-space: nowrap;
+    }
+
+    body.paypal-collapsed .paypal-col {
+      display: none;
+    }
+
+    @media (max-width: 720px) {
+      body {
+        margin: 12px;
+        max-width: 100%;
+      }
+
+      h1 { font-size: 22px; }
+      h2 { font-size: 18px; }
+
+      .row {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+      }
+
+      .row > * {
+        width: 100%;
+      }
+
+      input, select, button {
+        width: 100%;
+        font-size: 16px;
+      }
+
+      input[type="number"], input[type="url"] {
+        width: 100%;
+      }
+
+      table {
+        font-size: 14px;
+      }
+
+      th, td {
+        padding: 6px;
+      }
+    }
   </style>
 </head>
 
@@ -97,21 +152,26 @@
   </div>
 
   <div class="card">
-    <h2>Spieler</h2>
+    <div class="row" style="align-items:center;">
+      <h2 style="margin:0;">Spieler</h2>
+      <button id="paypalToggle" class="pill paypal-toggle" type="button">PayPal ausblenden</button>
+    </div>
     <datalist id="playerNameMemory"></datalist>
-    <table>
-      <thead>
-        <tr><th>Name</th><th>PayPal-Link</th><th>Schulden (€)</th></tr>
-      </thead>
-      <tbody id="players"></tbody>
-      <tfoot>
-        <tr>
-          <td><strong>Summe</strong></td>
-          <td></td>
-          <td id="sumCell"><strong>0.00</strong></td>
-        </tr>
-      </tfoot>
-    </table>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Name</th><th class="paypal-col">PayPal-Link</th><th>Schulden (€)</th></tr>
+        </thead>
+        <tbody id="players"></tbody>
+        <tfoot>
+          <tr>
+            <td><strong>Summe</strong></td>
+            <td class="paypal-col"></td>
+            <td id="sumCell"><strong>0.00</strong></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
     <div class="muted mini">Gewinne sind negative Werte (Schulden werden kleiner).</div>
   </div>
 
@@ -215,7 +275,8 @@
 
       // IMPORTANT: Put background.jpeg in the same folder as index.html (repo root).
       // If you rename the file, update this path accordingly.
-      bg: { dataUrl: "background.jpeg", opacity: 0.6, collapsed: true }
+      bg: { dataUrl: "background.jpeg", opacity: 0.6, collapsed: true },
+      ui: { paypalCollapsed: false }
     };
   }
 
@@ -266,11 +327,16 @@
       collapsed: Boolean(bg.collapsed)
     };
 
+    const uiState = {
+      paypalCollapsed: Boolean(st?.ui?.paypalCollapsed)
+    };
+
     return {
       players,
       rounds: normalizedRounds.length ? normalizedRounds : defaultState(playerCount).rounds,
       currentRound,
-      bg: bgState
+      bg: bgState,
+      ui: uiState
     };
   }
 
@@ -300,6 +366,7 @@
   const resetAllEl = document.getElementById("resetAll");
   const prevRoundEl = document.getElementById("prevRound");
   const nextRoundEl = document.getElementById("nextRound");
+  const paypalToggleEl = document.getElementById("paypalToggle");
 
   let bgStyleTag = null;
 
@@ -329,6 +396,12 @@
     bgPanelEl.style.display = collapsed ? "none" : "block";
     bgToggleEl.textContent = collapsed ? "+" : "–";
     bgToggleEl.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  }
+
+  function applyPaypalVisibility() {
+    const collapsed = Boolean(state.ui?.paypalCollapsed);
+    document.body.classList.toggle("paypal-collapsed", collapsed);
+    paypalToggleEl.textContent = collapsed ? "PayPal einblenden" : "PayPal ausblenden";
   }
 
   function computeSum() {
@@ -394,6 +467,7 @@
       inp.value = p.name;
 
       const tdPaypal = document.createElement("td");
+      tdPaypal.className = "paypal-col";
       const paypalInp = document.createElement("input");
       paypalInp.type = "url";
       paypalInp.placeholder = "https://paypal.me/...";
@@ -668,6 +742,12 @@
     applyBgPanelState();
   });
 
+  paypalToggleEl.addEventListener("click", () => {
+    state.ui.paypalCollapsed = !state.ui.paypalCollapsed;
+    save(state);
+    applyPaypalVisibility();
+  });
+
   // Other events
   playerCountEl.addEventListener("change", () => {
     const n = clampInt(playerCountEl.value, MIN_PLAYERS, MAX_PLAYERS);
@@ -724,6 +804,7 @@
     renderPlayerCountOptions();
     setBackgroundFromState();
     applyBgPanelState();
+    applyPaypalVisibility();
     renderPlayers();
     renderSetup();
     renderCurrentRound();
