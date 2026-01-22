@@ -37,6 +37,7 @@
       margin-top: 8px;
       background: rgba(255,255,255,0.85);
     }
+    .table-wrap { overflow-x: auto; }
     th, td {
       padding: 8px;
       border-bottom: 1px solid #ddd;
@@ -49,6 +50,7 @@
       margin: 2px 0;
     }
     input[type="number"] { width: 120px; }
+    input[type="url"] { width: 280px; }
 
     button { cursor: pointer; }
     .pill {
@@ -73,6 +75,30 @@
     }
     .spacer { flex: 1; }
     .mini { font-size: 12px; }
+
+    body.paypal-collapsed .paypal-col {
+      display: none;
+    }
+
+    @media (max-width: 720px) {
+      body { margin: 12px; }
+      h1 { font-size: 24px; }
+      h2 { font-size: 18px; }
+      .card { padding: 10px; }
+      table { font-size: 14px; }
+      input, select, button { width: 100%; }
+      input[type="number"] { width: 100%; }
+      input[type="url"] { width: 100%; }
+      .row { gap: 8px; }
+      .row > * { margin: 2px 0; }
+      th.amount-col,
+      td.amount-col {
+        width: 90px;
+      }
+      td.amount-col input[type="number"] {
+        min-width: 0;
+      }
+    }
   </style>
 </head>
 
@@ -96,19 +122,27 @@
   </div>
 
   <div class="card">
-    <h2>Spieler</h2>
-    <table>
+    <div class="row">
+      <h2 style="margin:0;">Spieler</h2>
+      <div class="spacer"></div>
+      <button id="paypalToggle" class="pill" type="button">PayPal einblenden</button>
+    </div>
+    <datalist id="playerNameMemory"></datalist>
+    <div class="table-wrap">
+      <table>
       <thead>
-        <tr><th>Name</th><th>Schulden (€)</th></tr>
+        <tr><th>Name</th><th class="paypal-col">PayPal-Link</th><th>Schulden (€)</th></tr>
       </thead>
       <tbody id="players"></tbody>
       <tfoot>
         <tr>
           <td><strong>Summe</strong></td>
+          <td class="paypal-col"></td>
           <td id="sumCell"><strong>0.00</strong></td>
         </tr>
       </tfoot>
-    </table>
+      </table>
+    </div>
     <div class="muted mini">Gewinne sind negative Werte (Schulden werden kleiner).</div>
   </div>
 
@@ -120,7 +154,7 @@
           <th>#</th>
           <th>Regel</th>
           <th>Typ</th>
-          <th>Betrag(e)</th>
+          <th class="amount-col">Betrag(e)</th>
         </tr>
       </thead>
       <tbody id="roundSetup"></tbody>
@@ -172,6 +206,7 @@
 
   // If you already used an older version, changing the key forces a fresh default background for everyone.
   const STORAGE_KEY = "knochekarle_v1";
+  const PLAYER_MEMORY_KEY = "knochekarle_player_memory_v1";
   const MIN_PLAYERS = 2;
   const MAX_PLAYERS = 12;
 
@@ -184,11 +219,21 @@
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   }
 
+  function loadPlayerMemory() {
+    try { return JSON.parse(localStorage.getItem(PLAYER_MEMORY_KEY)); }
+    catch { return null; }
+  }
+
+  function savePlayerMemory(memory) {
+    localStorage.setItem(PLAYER_MEMORY_KEY, JSON.stringify(memory));
+  }
+
   function defaultState(count = 4) {
     return {
       players: Array.from({ length: count }, (_, i) => ({
         name: `Spieler ${i + 1}`,
-        debt: 0
+        debt: 0,
+        paypal: ""
       })),
       rounds: [
         { name: "Letzter Stich", type: "ONE", amount: 0.5, amount2: 0 },
@@ -201,7 +246,8 @@
 
       // IMPORTANT: Put background.jpeg in the same folder as index.html (repo root).
       // If you rename the file, update this path accordingly.
-      bg: { dataUrl: "background.jpeg", opacity: 0.6, collapsed: true }
+      bg: { dataUrl: "background.jpeg", opacity: 0.6, collapsed: true },
+      ui: { paypalCollapsed: true }
     };
   }
 
@@ -218,13 +264,14 @@
     // Players
     const players = Array.isArray(st.players) ? st.players.slice(0, playerCount) : [];
     while (players.length < playerCount) {
-      players.push({ name: `Spieler ${players.length + 1}`, debt: 0 });
+      players.push({ name: `Spieler ${players.length + 1}`, debt: 0, paypal: "" });
     }
     for (let i = 0; i < players.length; i++) {
       const p = players[i] ?? {};
       players[i] = {
         name: String(p.name ?? `Spieler ${i + 1}`),
-        debt: Number.isFinite(Number(p.debt)) ? Number(p.debt) : 0
+        debt: Number.isFinite(Number(p.debt)) ? Number(p.debt) : 0,
+        paypal: String(p.paypal ?? "")
       };
     }
 
@@ -255,12 +302,18 @@
       players,
       rounds: normalizedRounds.length ? normalizedRounds : defaultState(playerCount).rounds,
       currentRound,
-      bg: bgState
+      bg: bgState,
+      ui: {
+        paypalCollapsed: Boolean(st.ui?.paypalCollapsed)
+      }
     };
   }
 
   let state = ensureState(load() ?? defaultState(4));
   save(state);
+
+  let playerMemory = loadPlayerMemory() ?? {};
+  savePlayerMemory(playerMemory);
 
   // DOM
   const playerCountEl = document.getElementById("playerCount");
@@ -276,6 +329,7 @@
   const bgRemoveEl = document.getElementById("bgRemove");
   const bgToggleEl = document.getElementById("bgToggle");
   const bgPanelEl = document.getElementById("bgPanel");
+  const paypalToggleEl = document.getElementById("paypalToggle");
 
   const applyRoundEl = document.getElementById("applyRound");
   const addRoundEl = document.getElementById("addRound");
@@ -313,6 +367,12 @@
     bgToggleEl.setAttribute("aria-expanded", collapsed ? "false" : "true");
   }
 
+  function applyPaypalVisibility() {
+    const collapsed = Boolean(state.ui?.paypalCollapsed);
+    document.body.classList.toggle("paypal-collapsed", collapsed);
+    paypalToggleEl.textContent = collapsed ? "PayPal einblenden" : "PayPal ausblenden";
+  }
+
   function computeSum() {
     return state.players.reduce((acc, p) => acc + (Number(p.debt) || 0), 0);
   }
@@ -329,6 +389,42 @@
   }
 
   // Focus-safe player rendering: no full re-render on each keystroke.
+  function normalizePlayerName(name) {
+    return String(name ?? "").trim();
+  }
+
+  function setMemoryEntry(name, paypal) {
+    const trimmed = normalizePlayerName(name);
+    if (!trimmed) return;
+    playerMemory[trimmed] = { paypal: String(paypal ?? "") };
+    savePlayerMemory(playerMemory);
+    renderMemoryDatalist();
+  }
+
+  function renderMemoryDatalist() {
+    const datalist = document.getElementById("playerNameMemory");
+    if (!datalist) return;
+    datalist.innerHTML = "";
+    Object.keys(playerMemory)
+      .sort((a, b) => a.localeCompare(b))
+      .forEach(name => {
+        const option = document.createElement("option");
+        option.value = name;
+        datalist.appendChild(option);
+      });
+  }
+
+  function applyMemoryToPlayer(index, nameInput, paypalInput) {
+    const trimmed = normalizePlayerName(nameInput.value);
+    if (!trimmed) return;
+    const memory = playerMemory[trimmed];
+    if (memory?.paypal && !state.players[index].paypal) {
+      state.players[index].paypal = memory.paypal;
+      paypalInput.value = memory.paypal;
+      save(state);
+    }
+  }
+
   function renderPlayers() {
     playersEl.innerHTML = "";
     state.players.forEach((p, idx) => {
@@ -336,7 +432,15 @@
 
       const tdName = document.createElement("td");
       const inp = document.createElement("input");
+      inp.setAttribute("list", "playerNameMemory");
       inp.value = p.name;
+
+      const tdPaypal = document.createElement("td");
+      tdPaypal.className = "paypal-col";
+      const paypalInp = document.createElement("input");
+      paypalInp.type = "url";
+      paypalInp.placeholder = "https://paypal.me/...";
+      paypalInp.value = p.paypal ?? "";
 
       inp.addEventListener("input", () => {
         state.players[idx].name = inp.value;
@@ -344,15 +448,29 @@
       });
 
       inp.addEventListener("blur", () => {
+        applyMemoryToPlayer(idx, inp, paypalInp);
+        setMemoryEntry(inp.value, paypalInp.value);
         renderCurrentRound();
       });
 
       tdName.appendChild(inp);
 
+      paypalInp.addEventListener("input", () => {
+        state.players[idx].paypal = paypalInp.value;
+        save(state);
+      });
+
+      paypalInp.addEventListener("blur", () => {
+        setMemoryEntry(inp.value, paypalInp.value);
+      });
+
+      tdPaypal.appendChild(paypalInp);
+
       const tdDebt = document.createElement("td");
       tdDebt.textContent = p.debt.toFixed(2);
 
       tr.appendChild(tdName);
+      tr.appendChild(tdPaypal);
       tr.appendChild(tdDebt);
       playersEl.appendChild(tr);
     });
@@ -403,6 +521,7 @@
       tdType.appendChild(sel);
 
       const tdAmount = document.createElement("td");
+      tdAmount.className = "amount-col";
       if (r.type === "PODIUM") {
         const a1 = document.createElement("input");
         a1.type = "number"; a1.step = "0.01"; a1.value = String(r.amount);
@@ -593,6 +712,12 @@
     applyBgPanelState();
   });
 
+  paypalToggleEl.addEventListener("click", () => {
+    state.ui.paypalCollapsed = !state.ui.paypalCollapsed;
+    save(state);
+    applyPaypalVisibility();
+  });
+
   // Other events
   playerCountEl.addEventListener("change", () => {
     const n = clampInt(playerCountEl.value, MIN_PLAYERS, MAX_PLAYERS);
@@ -600,7 +725,7 @@
     const oldPlayers = state.players.slice();
     const newPlayers = Array.from({ length: n }, (_, i) => {
       if (i < oldPlayers.length) return { ...oldPlayers[i] };
-      return { name: `Spieler ${i + 1}`, debt: 0 };
+      return { name: `Spieler ${i + 1}`, debt: 0, paypal: "" };
     });
 
     state.players = newPlayers;
@@ -643,10 +768,13 @@
   function init() {
     state = ensureState(state);
     save(state);
+    playerMemory = loadPlayerMemory() ?? {};
+    renderMemoryDatalist();
 
     renderPlayerCountOptions();
     setBackgroundFromState();
     applyBgPanelState();
+    applyPaypalVisibility();
     renderPlayers();
     renderSetup();
     renderCurrentRound();
