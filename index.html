@@ -175,6 +175,32 @@
     </div>
   </div>
 
+  <!-- Background menu at bottom + collapsible -->
+  <div class="card" id="bgCard">
+    <div class="row" style="align-items:center;">
+      <h2 style="margin:0;">Hintergrundbild</h2>
+
+      <div class="spacer"></div>
+
+      <button id="bgToggle" title="Ein-/ausklappen" aria-expanded="true">–</button>
+    </div>
+
+    <div id="bgPanel" style="margin-top:10px;">
+      <div class="row">
+        <input id="bgFile" type="file" accept="image/*" />
+        <label class="mini">Transparenz:
+          <input id="bgOpacity" type="range" min="0" max="0.6" step="0.01" />
+          <span id="bgOpacityVal" class="pill"></span>
+        </label>
+        <button id="bgRemove" class="danger">Hintergrund entfernen</button>
+      </div>
+
+      <div class="muted mini">
+        Hinweis: Das Bild wird lokal im Browser gespeichert (kann je nach Bildgröße Speicher belegen).
+      </div>
+    </div>
+  </div>
+
 <script>
   // Comments in English as requested.
 
@@ -217,7 +243,9 @@
         { name: "Endrunde", type: "PODIUM", amount: 5, amount2: 4 }
       ],
       currentRound: 0,
-
+      // IMPORTANT: Put background.jpeg in the same folder as index.html (repo root).
+      // If you rename the file, update this path accordingly.
+      bg: { dataUrl: "background.jpeg", opacity: 0.6, collapsed: true },
       ui: { paypalCollapsed: true }
     };
   }
@@ -258,10 +286,22 @@
     // Current round
     const currentRound = clampInt(st.currentRound ?? 0, 0, Math.max(0, normalizedRounds.length));
 
+    // Background
+    const bgFallback = { dataUrl: "background.jpeg", opacity: 0.22, collapsed: true };
+    const bg = (st.bg && typeof st.bg === "object") ? st.bg : bgFallback;
+    const opacity = Number(bg.opacity);
+
+    const bgState = {
+      dataUrl: (typeof bg.dataUrl === "string" && bg.dataUrl.length) ? bg.dataUrl : bgFallback.dataUrl,
+      opacity: Number.isFinite(opacity) ? Math.min(0.6, Math.max(0, opacity)) : bgFallback.opacity,
+      collapsed: Boolean(bg.collapsed)
+    };
+
     return {
       players,
       rounds: normalizedRounds.length ? normalizedRounds : defaultState(playerCount).rounds,
       currentRound,
+      bg: bgState,
       ui: {
         paypalCollapsed: Boolean(st.ui?.paypalCollapsed)
       }
@@ -282,6 +322,12 @@
   const roundIndexEl = document.getElementById("roundIndex");
   const sumCellEl = document.getElementById("sumCell");
 
+  const bgFileEl = document.getElementById("bgFile");
+  const bgOpacityEl = document.getElementById("bgOpacity");
+  const bgOpacityValEl = document.getElementById("bgOpacityVal");
+  const bgRemoveEl = document.getElementById("bgRemove");
+  const bgToggleEl = document.getElementById("bgToggle");
+  const bgPanelEl = document.getElementById("bgPanel");
   const paypalToggleEl = document.getElementById("paypalToggle");
 
   const applyRoundEl = document.getElementById("applyRound");
@@ -289,6 +335,36 @@
   const resetAllEl = document.getElementById("resetAll");
   const prevRoundEl = document.getElementById("prevRound");
   const nextRoundEl = document.getElementById("nextRound");
+
+  let bgStyleTag = null;
+
+  function ensureBgRule(clear = false) {
+    if (!bgStyleTag) {
+      bgStyleTag = document.createElement("style");
+      document.head.appendChild(bgStyleTag);
+    }
+    if (clear || !state.bg.dataUrl) {
+      bgStyleTag.textContent = `body::before { background-image: none; }`;
+      return;
+    }
+    bgStyleTag.textContent = `body::before { background-image: url("${state.bg.dataUrl}"); }`;
+  }
+
+  function setBackgroundFromState() {
+    document.documentElement.style.setProperty("--bg-opacity", String(state.bg.opacity));
+    bgOpacityEl.value = String(state.bg.opacity);
+    bgOpacityValEl.textContent = state.bg.opacity.toFixed(2);
+
+    if (state.bg.dataUrl) ensureBgRule(false);
+    else ensureBgRule(true);
+  }
+
+  function applyBgPanelState() {
+    const collapsed = Boolean(state.bg.collapsed);
+    bgPanelEl.style.display = collapsed ? "none" : "block";
+    bgToggleEl.textContent = collapsed ? "+" : "–";
+    bgToggleEl.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  }
 
   function applyPaypalVisibility() {
     const collapsed = Boolean(state.ui?.paypalCollapsed);
@@ -566,6 +642,40 @@
     }
   }
 
+  // Background events
+  bgOpacityEl.addEventListener("input", () => {
+    state.bg.opacity = Number(bgOpacityEl.value);
+    save(state);
+    setBackgroundFromState();
+  });
+
+  bgRemoveEl.addEventListener("click", () => {
+    state.bg.dataUrl = null;
+    save(state);
+    setBackgroundFromState();
+  });
+
+  bgFileEl.addEventListener("change", () => {
+    const file = bgFileEl.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      state.bg.dataUrl = String(reader.result);
+      save(state);
+      setBackgroundFromState();
+      applyBgPanelState();
+      bgFileEl.value = "";
+    };
+    reader.readAsDataURL(file);
+  });
+
+  bgToggleEl.addEventListener("click", () => {
+    state.bg.collapsed = !state.bg.collapsed;
+    save(state);
+    applyBgPanelState();
+  });
+
   function applyRound() {
     if (state.currentRound >= state.rounds.length) return;
     const r = state.rounds[state.currentRound];
@@ -661,6 +771,8 @@
     renderMemoryDatalist();
 
     renderPlayerCountOptions();
+    setBackgroundFromState();
+    applyBgPanelState();
     applyPaypalVisibility();
     renderPlayers();
     renderSetup();
