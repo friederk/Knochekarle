@@ -88,6 +88,8 @@
       text-align: center;
     }
     #settlementEmpty { margin-top: 6px; }
+    .action-col { text-align: center; width: 70px; }
+    body.actions-hidden .action-col { display: none; }
 
     @media (max-width: 720px) {
       body { margin: 12px; }
@@ -126,8 +128,6 @@
       Runde:
       <span id="roundIndex" class="pill">1</span>
     </div>
-
-    <button id="resetAll" class="danger">Alles zurücksetzen</button>
   </div>
 
   <div class="card">
@@ -156,7 +156,11 @@
   </div>
 
   <div class="card">
-    <h2>Runden-Einstellungen</h2>
+    <div class="row" style="align-items:center;">
+      <h2 style="margin:0;">Runden-Einstellungen</h2>
+      <div class="spacer"></div>
+      <button id="actionsToggle" class="pill" type="button">Aktionen einblenden</button>
+    </div>
     <table>
       <thead>
         <tr>
@@ -164,6 +168,7 @@
           <th>Regel</th>
           <th>Typ</th>
           <th class="amount-col">Betrag(e)</th>
+          <th class="action-col">Aktion</th>
         </tr>
       </thead>
       <tbody id="roundSetup"></tbody>
@@ -203,6 +208,17 @@
         </thead>
         <tbody id="settlementBody"></tbody>
       </table>
+    </div>
+  </div>
+
+  <div class="card" id="toolsCard">
+    <div class="row" style="align-items:center;">
+      <h2 style="margin:0;">Werkzeuge</h2>
+      <div class="spacer"></div>
+      <button id="toolsToggle" title="Ein-/ausklappen" aria-expanded="false">+</button>
+    </div>
+    <div id="toolsPanel" style="margin-top:10px; display:none;">
+      <button id="resetAll" class="danger">Alles zurücksetzen</button>
     </div>
   </div>
 
@@ -279,6 +295,11 @@
       bg: { dataUrl: "background.jpeg", opacity: 0.6, collapsed: true },
       ui: { paypalCollapsed: true },
       meta: { sign: "positiveIsDebt" }
+      , ui: {
+        paypalCollapsed: true,
+        actionsCollapsed: true,
+        toolsCollapsed: true
+      }
     };
   }
 
@@ -350,7 +371,9 @@
       currentRound,
       bg: bgState,
       ui: {
-        paypalCollapsed: Boolean(st.ui?.paypalCollapsed)
+        paypalCollapsed: Boolean(st.ui?.paypalCollapsed),
+        actionsCollapsed: st.ui?.actionsCollapsed !== false, // default true
+        toolsCollapsed: st.ui?.toolsCollapsed !== false     // default true
       },
       meta: { sign }
     };
@@ -377,6 +400,9 @@
   const bgToggleEl = document.getElementById("bgToggle");
   const bgPanelEl = document.getElementById("bgPanel");
   const paypalToggleEl = document.getElementById("paypalToggle");
+  const actionsToggleEl = document.getElementById("actionsToggle");
+  const toolsToggleEl = document.getElementById("toolsToggle");
+  const toolsPanelEl = document.getElementById("toolsPanel");
   const settlementTableEl = document.getElementById("settlementTable");
   const settlementBodyEl = document.getElementById("settlementBody");
   const settlementEmptyEl = document.getElementById("settlementEmpty");
@@ -422,6 +448,15 @@
     const collapsed = Boolean(state.ui?.paypalCollapsed);
     document.body.classList.toggle("paypal-collapsed", collapsed);
     paypalToggleEl.textContent = collapsed ? "PayPal einblenden" : "PayPal ausblenden";
+  }
+
+  function applyToolsVisibility() {
+    const collapsed = Boolean(state.ui?.toolsCollapsed);
+    if (toolsPanelEl) toolsPanelEl.style.display = collapsed ? "none" : "block";
+    if (toolsToggleEl) {
+      toolsToggleEl.textContent = collapsed ? "+" : "–";
+      toolsToggleEl.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    }
   }
 
   function computeSum() {
@@ -557,6 +592,14 @@
     renderSettlement();
   }
 
+  function applyActionsVisibility() {
+    const collapsed = Boolean(state.ui?.actionsCollapsed);
+    document.body.classList.toggle("actions-hidden", collapsed);
+    if (actionsToggleEl) {
+      actionsToggleEl.textContent = collapsed ? "Aktionen einblenden" : "Aktionen ausblenden";
+    }
+  }
+
   function renderSetup() {
     setupEl.innerHTML = "";
     state.rounds.forEach((r, i) => {
@@ -618,10 +661,21 @@
         tdAmount.appendChild(a);
       }
 
+      const tdAction = document.createElement("td");
+      tdAction.className = "action-col";
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "danger mini";
+      delBtn.textContent = "−";
+      delBtn.disabled = state.rounds.length <= 1;
+      delBtn.addEventListener("click", () => removeRound(i));
+      tdAction.appendChild(delBtn);
+
       tr.appendChild(tdIdx);
       tr.appendChild(tdName);
       tr.appendChild(tdType);
       tr.appendChild(tdAmount);
+      tr.appendChild(tdAction);
       setupEl.appendChild(tr);
     });
   }
@@ -864,6 +918,16 @@
     renderCurrentRound();
   });
 
+  function removeRound(index) {
+    if (state.rounds.length <= 1) return;
+    state.rounds.splice(index, 1);
+    state.currentRound = Math.min(state.currentRound, state.rounds.length - 1);
+    if (state.currentRound < 0) state.currentRound = 0;
+    save(state);
+    renderSetup();
+    renderCurrentRound();
+  }
+
   resetAllEl.addEventListener("click", () => {
     if (!confirm("Alles wirklich zurücksetzen? (Spieler, Schulden, Runden, Hintergrund)")) return;
     state = defaultState(state.players.length);
@@ -891,6 +955,18 @@
     applyPaypalVisibility();
   });
 
+  actionsToggleEl?.addEventListener("click", () => {
+    state.ui.actionsCollapsed = !state.ui.actionsCollapsed;
+    save(state);
+    applyActionsVisibility();
+  });
+
+  toolsToggleEl?.addEventListener("click", () => {
+    state.ui.toolsCollapsed = !state.ui.toolsCollapsed;
+    save(state);
+    applyToolsVisibility();
+  });
+
   function init() {
     state = ensureState(state);
     save(state);
@@ -901,6 +977,8 @@
     setBackgroundFromState();
     applyBgPanelState();
     applyPaypalVisibility();
+    applyActionsVisibility();
+    applyToolsVisibility();
     renderPlayers();
     renderSetup();
     renderCurrentRound();
@@ -910,3 +988,4 @@
 </script>
 </body>
 </html>
+
