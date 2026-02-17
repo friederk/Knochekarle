@@ -79,6 +79,16 @@
       display: none;
     }
 
+    #settlementCard table td:nth-child(3),
+    #settlementCard table th:nth-child(3) {
+      text-align: right;
+    }
+    #settlementCard table td:nth-child(4),
+    #settlementCard table th:nth-child(4) {
+      text-align: center;
+    }
+    #settlementEmpty { margin-top: 6px; }
+
     @media (max-width: 720px) {
       body { margin: 12px; }
       h1 { font-size: 24px; }
@@ -174,6 +184,28 @@
     </div>
   </div>
 
+  <div class="card" id="settlementCard">
+    <div class="row" style="align-items:center;">
+      <h2 style="margin:0;">Ausgleichszahlungen</h2>
+      <div class="spacer"></div>
+      <div id="settlementSummary" class="muted mini"></div>
+    </div>
+    <div id="settlementEmpty" class="muted mini">Keine Ausgleichszahlungen nötig.</div>
+    <div class="table-wrap">
+      <table id="settlementTable">
+        <thead>
+          <tr>
+            <th>Von</th>
+            <th>An</th>
+            <th>Betrag (€)</th>
+            <th>PayPal</th>
+          </tr>
+        </thead>
+        <tbody id="settlementBody"></tbody>
+      </table>
+    </div>
+  </div>
+
   <!-- Background menu at bottom + collapsible -->
   <div class="card" id="bgCard">
     <div class="row" style="align-items:center;">
@@ -245,7 +277,8 @@
       // IMPORTANT: Put background.jpeg in the same folder as index.html (repo root).
       // If you rename the file, update this path accordingly.
       bg: { dataUrl: "background.jpeg", opacity: 0.6, collapsed: true },
-      ui: { paypalCollapsed: true }
+      ui: { paypalCollapsed: true },
+      meta: { sign: "positiveIsDebt" }
     };
   }
 
@@ -258,9 +291,11 @@
   function ensureState(s) {
     const playerCount = clampInt(s?.players?.length ?? 4, MIN_PLAYERS, MAX_PLAYERS);
     const st = (s && typeof s === "object") ? s : defaultState(4);
+    let sign = st.meta?.sign === "negativeIsDebt" ? "negativeIsDebt"
+      : (st.meta?.sign === "positiveIsDebt" ? "positiveIsDebt" : null);
 
     // Players
-    const players = Array.isArray(st.players) ? st.players.slice(0, playerCount) : [];
+    let players = Array.isArray(st.players) ? st.players.slice(0, playerCount) : [];
     while (players.length < playerCount) {
       players.push({ name: `Spieler ${players.length + 1}`, debt: 0, paypal: "" });
     }
@@ -271,6 +306,19 @@
         debt: Number.isFinite(Number(p.debt)) ? Number(p.debt) : 0,
         paypal: String(p.paypal ?? "")
       };
+    }
+
+    if (!sign) {
+      const pos = players.filter(p => Number(p.debt) > 0.009).length;
+      const neg = players.filter(p => Number(p.debt) < -0.009).length;
+      if (pos > 0 && neg === 0) sign = "positiveIsDebt";
+      else if (neg > 0 && pos === 0) sign = "negativeIsDebt";
+      else sign = "positiveIsDebt";
+    }
+    // Migration: wir stellen auf positive=Schuld, negative=Guthaben um.
+    if (sign === "negativeIsDebt") {
+      players = players.map(p => ({ ...p, debt: -(Number(p.debt) || 0) }));
+      sign = "positiveIsDebt";
     }
 
     // Rounds
@@ -303,7 +351,8 @@
       bg: bgState,
       ui: {
         paypalCollapsed: Boolean(st.ui?.paypalCollapsed)
-      }
+      },
+      meta: { sign }
     };
   }
 
@@ -328,6 +377,10 @@
   const bgToggleEl = document.getElementById("bgToggle");
   const bgPanelEl = document.getElementById("bgPanel");
   const paypalToggleEl = document.getElementById("paypalToggle");
+  const settlementTableEl = document.getElementById("settlementTable");
+  const settlementBodyEl = document.getElementById("settlementBody");
+  const settlementEmptyEl = document.getElementById("settlementEmpty");
+  const settlementSummaryEl = document.getElementById("settlementSummary");
 
   const applyRoundEl = document.getElementById("applyRound");
   const addRoundEl = document.getElementById("addRound");
@@ -373,6 +426,33 @@
 
   function computeSum() {
     return state.players.reduce((acc, p) => acc + (Number(p.debt) || 0), 0);
+  }
+
+  function calculateSettlement(players) {
+    const debtors = [];   // owe money (positive)
+    const creditors = []; // are owed money (negative)
+    players.forEach(p => {
+      const val = Number(p.debt) || 0;
+      if (val > 0.009) debtors.push({ name: p.name, paypal: p.paypal, amount: val });
+      else if (val < -0.009) creditors.push({ name: p.name, paypal: p.paypal, amount: -val });
+    });
+
+    debtors.sort((a, b) => b.amount - a.amount);
+    creditors.sort((a, b) => b.amount - a.amount);
+
+    const transfers = [];
+    let i = 0, j = 0;
+    while (i < debtors.length && j < creditors.length) {
+      const payer = debtors[i];
+      const receiver = creditors[j];
+      const amount = Math.min(payer.amount, receiver.amount);
+      transfers.push({ from: payer, to: receiver, amount });
+      payer.amount -= amount;
+      receiver.amount -= amount;
+      if (payer.amount < 0.009) i++;
+      if (receiver.amount < 0.009) j++;
+    }
+    return transfers;
   }
 
   function renderPlayerCountOptions() {
@@ -474,6 +554,7 @@
     });
 
     sumCellEl.innerHTML = `<strong>${computeSum().toFixed(2)}</strong>`;
+    renderSettlement();
   }
 
   function renderSetup() {
@@ -630,7 +711,7 @@
 
       const hint = document.createElement("div");
       hint.className = "muted mini";
-      hint.textContent = "Gewinn reduziert Schulden (wird als negativer Betrag verbucht).";
+      hint.textContent = "Gewinn reduziert deine Schulden (wird als negativer Betrag verbucht).";
 
       currentEl.appendChild(row1);
       currentEl.appendChild(row2);
@@ -639,6 +720,53 @@
       currentEl._first = sel1;
       currentEl._second = sel2;
     }
+  }
+
+  function renderSettlement() {
+    if (!settlementTableEl || !settlementBodyEl || !settlementEmptyEl || !settlementSummaryEl) return;
+
+    const transfers = calculateSettlement(state.players);
+    const totalDebt = state.players.reduce((acc, p) => acc + Math.max(0, Number(p.debt) || 0), 0);
+    const totalCredit = state.players.reduce((acc, p) => acc + Math.max(0, -(Number(p.debt) || 0)), 0);
+    settlementSummaryEl.textContent = `Schulden: ${totalDebt.toFixed(2)} € • Guthaben: ${totalCredit.toFixed(2)} €`;
+
+    settlementBodyEl.innerHTML = "";
+    if (!transfers.length) {
+      settlementTableEl.style.display = "none";
+      settlementEmptyEl.style.display = "block";
+      if (totalDebt > 0 && totalCredit === 0) {
+        settlementEmptyEl.textContent = "Es gibt Schulden, aber noch kein Guthaben erfasst.";
+      } else {
+        settlementEmptyEl.textContent = "Keine Ausgleichszahlungen nötig.";
+      }
+      return;
+    }
+
+    settlementTableEl.style.display = "table";
+    settlementEmptyEl.style.display = "none";
+
+    transfers.forEach(t => {
+      const tr = document.createElement("tr");
+      const tdFrom = document.createElement("td");
+      tdFrom.textContent = t.from.name;
+      const tdTo = document.createElement("td");
+      tdTo.textContent = t.to.name;
+      const tdAmount = document.createElement("td");
+      tdAmount.textContent = `${t.amount.toFixed(2)} €`;
+      const tdPaypal = document.createElement("td");
+      if (t.to.paypal) {
+        const a = document.createElement("a");
+        a.href = t.to.paypal;
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.textContent = "Link";
+        tdPaypal.appendChild(a);
+      } else {
+        tdPaypal.textContent = "–";
+      }
+      tr.append(tdFrom, tdTo, tdAmount, tdPaypal);
+      settlementBodyEl.appendChild(tr);
+    });
   }
 
   // Background events
@@ -682,14 +810,14 @@
     if (r.type === "ONE") {
       const idx = Number(currentEl._loser.value);
       if (!Number.isInteger(idx)) return;
-      state.players[idx].debt += (Number(r.amount) || 0);
+      state.players[idx].debt += (Number(r.amount) || 0); // Schuld steigt
     }
 
     if (r.type === "COUNT") {
       currentEl._counts.forEach((inp, i) => {
         const count = Number(inp.value);
         const a = Number(r.amount) || 0;
-        if (Number.isFinite(count)) state.players[i].debt += count * a;
+        if (Number.isFinite(count)) state.players[i].debt += count * a; // Schuld steigt pro Ereignis
       });
     }
 
@@ -700,7 +828,7 @@
         alert("1. und 2. Platz dürfen nicht gleich sein.");
         return;
       }
-      state.players[a].debt -= (Number(r.amount) || 0);
+      state.players[a].debt -= (Number(r.amount) || 0);   // Gewinn reduziert Schuld
       state.players[b].debt -= (Number(r.amount2) || 0);
     }
 
